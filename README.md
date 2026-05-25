@@ -10,7 +10,7 @@ POSTGRES_CONTAINER="netbox-docker-postgres-1"
 DB_NAME="netbox"
 DB_USER="netbox"
 
-BACKUP_DIR="$HOME/netbox-backups"
+BACKUP_DIR="/home/netbox_admin/netbox-backups"
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/netbox_postgres_$DATE.dump"
 CHECKSUM_FILE="$BACKUP_FILE.sha256"
