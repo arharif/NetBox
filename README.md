@@ -6,8 +6,11 @@ from extras.scripts import Script
 
 
 DEVICE_POWER_FIELD = "power_consumption_watts"
+
 RACK_CONSUMED_FIELD = "rack_power_consumed_watts"
+
 RACK_CAPACITY_FIELD = "rack_power_capacity_watts"
+
 RACK_USAGE_PERCENT_FIELD = "rack_power_usage_percent"
 
 
