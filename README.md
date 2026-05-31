@@ -1,4 +1,3 @@
-
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
@@ -16,33 +15,28 @@ class RackPowerConsumptionCalculation(Script):
 
     class Meta:
         name = "Rack Power Consumption Calculation"
-        description = "Calculate electrical power consumption for each rack based on device custom fields."
+        description = "Calculate electrical consumption for each rack."
         commit_default = False
 
-    def get_power_value(self, device):
-        """
-        Get device power consumption from custom field.
-        Invalid values are ignored.
-        """
-
+    def get_device_power(self, device):
         custom_fields = device.custom_field_data or {}
-        raw_value = custom_fields.get(DEVICE_POWER_FIELD)
+        raw_power = custom_fields.get(DEVICE_POWER_FIELD)
 
-        if raw_value in [None, ""]:
+        if raw_power in [None, ""]:
             return 0
 
         try:
-            power = Decimal(str(raw_value))
+            power = Decimal(str(raw_power))
         except (InvalidOperation, ValueError, TypeError):
             self.log_warning(
-                f"Invalid power value '{raw_value}' on device {device.name}. Ignored.",
+                f"Invalid power value '{raw_power}' on device {device.name}. Ignored.",
                 obj=device
             )
             return 0
 
         if power < 0:
             self.log_warning(
-                f"Negative power value '{raw_value}' on device {device.name}. Ignored.",
+                f"Negative power value '{raw_power}' on device {device.name}. Ignored.",
                 obj=device
             )
             return 0
@@ -59,9 +53,7 @@ class RackPowerConsumptionCalculation(Script):
         ).select_related("rack")
 
         for device in devices.iterator():
-
-            power = self.get_power_value(device)
-
+            power = self.get_device_power(device)
             rack_consumption[device.rack_id] += power
             rack_device_count[device.rack_id] += 1
 
@@ -74,22 +66,20 @@ class RackPowerConsumptionCalculation(Script):
 
             rack.custom_field_data = rack.custom_field_data or {}
 
-            capacity = rack.custom_field_data.get(RACK_CAPACITY_FIELD)
-
+            raw_capacity = rack.custom_field_data.get(RACK_CAPACITY_FIELD)
             usage_percent = None
 
-            if capacity not in [None, "", 0, "0"]:
+            if raw_capacity not in [None, "", 0, "0"]:
                 try:
-                    capacity_value = Decimal(str(capacity))
-
-                    if capacity_value > 0:
+                    capacity = Decimal(str(raw_capacity))
+                    if capacity > 0:
                         usage_percent = round(
-                            Decimal(consumed_power) / capacity_value * 100,
+                            Decimal(consumed_power) / capacity * 100,
                             2
                         )
                 except (InvalidOperation, ValueError, TypeError):
                     self.log_warning(
-                        f"Invalid capacity value '{capacity}' on rack {rack.name}.",
+                        f"Invalid rack capacity value '{raw_capacity}' on rack {rack.name}.",
                         obj=rack
                     )
 
@@ -98,49 +88,24 @@ class RackPowerConsumptionCalculation(Script):
             if usage_percent is not None:
                 rack.custom_field_data[RACK_USAGE_PERCENT_FIELD] = float(usage_percent)
 
-            if commit:
-                if hasattr(rack, "snapshot"):
-                    rack.snapshot()
-
-                rack.full_clean()
-                rack.save()
-
-                self.log_success(
-                    f"{rack.name}: {consumed_power} W consumed "
-                    f"across {device_count} device(s)"
-                    + (
-                        f" | Usage: {usage_percent}%"
-                        if usage_percent is not None
-                        else ""
-                    ),
-                    obj=rack
-                )
-            else:
-                self.log_info(
-                    f"[DRY RUN] {rack.name}: {consumed_power} W consumed "
-                    f"across {device_count} device(s)"
-                    + (
-                        f" | Usage: {usage_percent}%"
-                        if usage_percent is not None
-                        else ""
-                    ),
-                    obj=rack
-                )
-
-            result_line = (
-                f"{rack.name}: {consumed_power} W"
-                + (
-                    f" | {usage_percent}% used"
-                    if usage_percent is not None
-                    else ""
-                )
+            message = (
+                f"{rack.name}: {consumed_power} W consumed "
+                f"across {device_count} device(s)"
             )
 
-            result_lines.append(result_line)
+            if usage_percent is not None:
+                message += f" | Usage: {usage_percent}%"
+
+            if commit:
+                rack.full_clean()
+                rack.save()
+                self.log_success(message, obj=rack)
+            else:
+                self.log_info("[DRY RUN] " + message, obj=rack)
+
+            result_lines.append(message)
 
         return "\n".join(result_lines)
-
-
 
 
 
