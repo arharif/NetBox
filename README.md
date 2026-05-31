@@ -1,17 +1,17 @@
-cat <<'EOF' > scripts/test_script.py
+docker-compose exec -u root netbox sh -c "cat > /opt/netbox/netbox/scripts/test_script.py <<'EOF'
 from extras.scripts import Script
-
 
 class TestScript(Script):
 
     class Meta:
-        name = "Test Script"
-        description = "Simple test script"
+        name = 'Test Script'
+        description = 'Simple NetBox script test'
 
     def run(self, data, commit):
-        self.log_success("The test script works.")
-        return "OK"
-EOF
+        self.log_success('The test script works.')
+        return 'OK'
+EOF"
+
 ---
 
 
