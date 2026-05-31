@@ -1,3 +1,163 @@
+
+from collections import defaultdict
+from decimal import Decimal, InvalidOperation
+
+from dcim.models import Device, Rack
+from extras.scripts import Script
+
+
+DEVICE_POWER_FIELD = "power_consumption_watts"
+RACK_CONSUMED_FIELD = "rack_power_consumed_watts"
+RACK_CAPACITY_FIELD = "rack_power_capacity_watts"
+RACK_USAGE_PERCENT_FIELD = "rack_power_usage_percent"
+
+
+class RackPowerConsumptionCalculation(Script):
+
+    class Meta:
+        name = "Rack Power Consumption Calculation"
+        description = "Calculate electrical power consumption for each rack based on device custom fields."
+        commit_default = False
+
+    def get_power_value(self, device):
+        """
+        Get device power consumption from custom field.
+        Invalid values are ignored.
+        """
+
+        custom_fields = device.custom_field_data or {}
+        raw_value = custom_fields.get(DEVICE_POWER_FIELD)
+
+        if raw_value in [None, ""]:
+            return 0
+
+        try:
+            power = Decimal(str(raw_value))
+        except (InvalidOperation, ValueError, TypeError):
+            self.log_warning(
+                f"Invalid power value '{raw_value}' on device {device.name}. Ignored.",
+                obj=device
+            )
+            return 0
+
+        if power < 0:
+            self.log_warning(
+                f"Negative power value '{raw_value}' on device {device.name}. Ignored.",
+                obj=device
+            )
+            return 0
+
+        return int(power)
+
+    def run(self, data, commit):
+
+        rack_consumption = defaultdict(int)
+        rack_device_count = defaultdict(int)
+
+        devices = Device.objects.filter(
+            rack__isnull=False
+        ).select_related("rack")
+
+        for device in devices.iterator():
+
+            power = self.get_power_value(device)
+
+            rack_consumption[device.rack_id] += power
+            rack_device_count[device.rack_id] += 1
+
+        result_lines = []
+
+        for rack in Rack.objects.all().iterator():
+
+            consumed_power = rack_consumption.get(rack.id, 0)
+            device_count = rack_device_count.get(rack.id, 0)
+
+            rack.custom_field_data = rack.custom_field_data or {}
+
+            capacity = rack.custom_field_data.get(RACK_CAPACITY_FIELD)
+
+            usage_percent = None
+
+            if capacity not in [None, "", 0, "0"]:
+                try:
+                    capacity_value = Decimal(str(capacity))
+
+                    if capacity_value > 0:
+                        usage_percent = round(
+                            Decimal(consumed_power) / capacity_value * 100,
+                            2
+                        )
+                except (InvalidOperation, ValueError, TypeError):
+                    self.log_warning(
+                        f"Invalid capacity value '{capacity}' on rack {rack.name}.",
+                        obj=rack
+                    )
+
+            rack.custom_field_data[RACK_CONSUMED_FIELD] = consumed_power
+
+            if usage_percent is not None:
+                rack.custom_field_data[RACK_USAGE_PERCENT_FIELD] = float(usage_percent)
+
+            if commit:
+                if hasattr(rack, "snapshot"):
+                    rack.snapshot()
+
+                rack.full_clean()
+                rack.save()
+
+                self.log_success(
+                    f"{rack.name}: {consumed_power} W consumed "
+                    f"across {device_count} device(s)"
+                    + (
+                        f" | Usage: {usage_percent}%"
+                        if usage_percent is not None
+                        else ""
+                    ),
+                    obj=rack
+                )
+            else:
+                self.log_info(
+                    f"[DRY RUN] {rack.name}: {consumed_power} W consumed "
+                    f"across {device_count} device(s)"
+                    + (
+                        f" | Usage: {usage_percent}%"
+                        if usage_percent is not None
+                        else ""
+                    ),
+                    obj=rack
+                )
+
+            result_line = (
+                f"{rack.name}: {consumed_power} W"
+                + (
+                    f" | {usage_percent}% used"
+                    if usage_percent is not None
+                    else ""
+                )
+            )
+
+            result_lines.append(result_line)
+
+        return "\n".join(result_lines)
+
+
+
+
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
 #!/usr/bin/env bash
 
 set -e
