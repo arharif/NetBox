@@ -5,195 +5,232 @@ from dcim.models import Device, Rack
 from extras.scripts import Script
 
 
-DEVICE_POWER_FIELD = "power_consumption_watts"
-RACK_CONSUMED_FIELD = "rack_power_consumed_watts"
-RACK_CAPACITY_FIELD = "rack_power_capacity_watts"
-RACK_USAGE_PERCENT_FIELD = "rack_power_usage_percent"
+DEVICE_POWER_FIELD = "Power_Reserved_Watts"
+DEVICE_POWER_FIELD_ALIASES = [
+    "Power_Reserved_Watts",
+    "power_reserved_watts",
+    "Power Reserved Watts",
+    "power_consumption_watts",
+]
+
+RACK_TOTAL_POWER_FIELD = "Rack_Total_Power"
+RACK_TOTAL_POWER_FIELD_ALIASES = [
+    "Rack_Total_Power",
+    "rack_total_power",
+    "rack_total_power_watts",
+]
+
+RACK_POWER_PERCENT_FIELD = "Rack_Power_Percentage"
+RACK_POWER_PERCENT_FIELD_ALIASES = [
+    "Rack_Power_Percentage",
+    "rack_power_percentage",
+    "rack_power_usage_percent",
+]
 
 
-class RackPowerConsumptionFinal(Script):
+class RackPowerReservedElite(Script):
 
     class Meta:
-        name = "Rack Power Consumption Final"
-        description = "Calculate rack electrical consumption, device count, rack usage percentage, and global totals."
+        name = "Rack Power Reserved Elite"
+        description = "Calculate reserved electrical power per rack, device count, percentage of global consumption, and total consumption."
         commit_default = False
         job_timeout = 600
 
-    def get_decimal_value(self, value):
+    def get_custom_field_value(self, obj, field_names):
+        custom_fields = obj.custom_field_data or {}
+
+        for field_name in field_names:
+            if field_name in custom_fields:
+                return custom_fields.get(field_name)
+
+        return None
+
+    def set_custom_field_value(self, obj, field_names, value):
+        obj.custom_field_data = obj.custom_field_data or {}
+
+        for field_name in field_names:
+            if field_name in obj.custom_field_data:
+                obj.custom_field_data[field_name] = value
+                return field_name
+
+        primary_field_name = field_names[0]
+        obj.custom_field_data[primary_field_name] = value
+        return primary_field_name
+
+    def parse_power_value(self, value):
         if value in [None, ""]:
-            return None
+            return 0, "empty"
 
         try:
-            return Decimal(str(value))
+            power = Decimal(str(value).strip())
         except (InvalidOperation, ValueError, TypeError):
-            return None
-
-    def get_device_power(self, device):
-        custom_fields = device.custom_field_data or {}
-        raw_power = custom_fields.get(DEVICE_POWER_FIELD)
-
-        power = self.get_decimal_value(raw_power)
-
-        if power is None:
-            return 0
+            return 0, "invalid"
 
         if power < 0:
-            device_name = getattr(device, "name", None) or str(device)
-            self.log_warning(
-                f"Negative power value '{raw_power}' on device {device_name}. Ignored.",
-                obj=device
-            )
-            return 0
+            return 0, "negative"
 
-        return int(power)
+        return int(power), "valid"
 
-    def format_usage(self, usage_percent):
-        if usage_percent is None:
-            return "N/A"
-        return f"{usage_percent:.2f}%"
+    def format_percentage(self, value):
+        if value is None:
+            return "0.00%"
+        return f"{value:.2f}%"
 
     def escape_table_value(self, value):
         return str(value).replace("|", "\\|")
 
     def run(self, data, commit):
 
-        rack_consumption = defaultdict(int)
+        rack_power = defaultdict(int)
         rack_device_count = defaultdict(int)
+
+        total_devices_with_power_value = 0
+        total_devices_without_power_value = 0
+        invalid_device_values = 0
+        negative_device_values = 0
 
         devices = Device.objects.filter(
             rack__isnull=False
         ).select_related("rack")
 
         for device in devices.iterator():
-            power = self.get_device_power(device)
-            rack_consumption[device.rack_id] += power
+
+            raw_power = self.get_custom_field_value(
+                device,
+                DEVICE_POWER_FIELD_ALIASES
+            )
+
+            power, status = self.parse_power_value(raw_power)
+
+            if status == "valid":
+                total_devices_with_power_value += 1
+
+            elif status == "empty":
+                total_devices_without_power_value += 1
+
+            elif status == "invalid":
+                invalid_device_values += 1
+                self.log_warning(
+                    f"Invalid power value '{raw_power}' ignored on device {device.name}.",
+                    obj=device
+                )
+
+            elif status == "negative":
+                negative_device_values += 1
+                self.log_warning(
+                    f"Negative power value '{raw_power}' ignored on device {device.name}.",
+                    obj=device
+                )
+
+            rack_power[device.rack_id] += power
             rack_device_count[device.rack_id] += 1
 
         total_racks = 0
-        total_devices_all_racks = 0
-        total_consumption_all_racks = 0
-
-        total_devices_with_capacity = 0
-        total_consumption_with_capacity = 0
-        total_capacity_with_capacity = 0
-        racks_with_valid_capacity = 0
-        racks_without_valid_capacity = 0
+        total_devices = 0
+        total_reserved_power = sum(rack_power.values())
 
         result_lines = []
-        result_lines.append("| Rack | Device Count | Consumption (W) | Capacity (W) | Usage % |")
-        result_lines.append("|------|--------------|-----------------|--------------|---------|")
+        result_lines.append("| Rack | Device Count | Rack Reserved Power (W) | % of Global Power |")
+        result_lines.append("|------|--------------|--------------------------|-------------------|")
 
         for rack in Rack.objects.all().order_by("name").iterator():
 
             total_racks += 1
 
             rack_name = getattr(rack, "name", None) or str(rack)
-
-            consumed_power = rack_consumption.get(rack.id, 0)
             device_count = rack_device_count.get(rack.id, 0)
+            reserved_power = rack_power.get(rack.id, 0)
 
-            total_devices_all_racks += device_count
-            total_consumption_all_racks += consumed_power
+            total_devices += device_count
 
-            rack.custom_field_data = rack.custom_field_data or {}
-
-            raw_capacity = rack.custom_field_data.get(RACK_CAPACITY_FIELD)
-            capacity = self.get_decimal_value(raw_capacity)
-
-            usage_percent = None
-            capacity_display = "N/A"
-
-            if capacity is not None and capacity > 0:
-                capacity_int = int(capacity)
-                capacity_display = str(capacity_int)
-
-                usage_percent = round(
-                    Decimal(consumed_power) / capacity * Decimal(100),
+            if total_reserved_power > 0:
+                rack_percentage = round(
+                    Decimal(reserved_power) / Decimal(total_reserved_power) * Decimal(100),
                     2
                 )
-
-                racks_with_valid_capacity += 1
-                total_devices_with_capacity += device_count
-                total_consumption_with_capacity += consumed_power
-                total_capacity_with_capacity += capacity_int
-
             else:
-                racks_without_valid_capacity += 1
+                rack_percentage = Decimal(0)
 
-                if raw_capacity not in [None, "", 0, "0"]:
-                    self.log_warning(
-                        f"Invalid rack capacity value '{raw_capacity}' on rack {rack_name}. Usage percentage not calculated.",
-                        obj=rack
-                    )
-
-            usage_display = self.format_usage(usage_percent)
+            percentage_display = self.format_percentage(rack_percentage)
 
             result_lines.append(
                 f"| {self.escape_table_value(rack_name)} "
                 f"| {device_count} "
-                f"| {consumed_power} "
-                f"| {capacity_display} "
-                f"| {usage_display} |"
+                f"| {reserved_power} "
+                f"| {percentage_display} |"
+            )
+
+            rack.custom_field_data = rack.custom_field_data or {}
+
+            previous_total_power = self.get_custom_field_value(
+                rack,
+                RACK_TOTAL_POWER_FIELD_ALIASES
+            )
+
+            previous_percentage = self.get_custom_field_value(
+                rack,
+                RACK_POWER_PERCENT_FIELD_ALIASES
             )
 
             if commit:
                 if hasattr(rack, "snapshot"):
                     rack.snapshot()
 
-                rack.custom_field_data[RACK_CONSUMED_FIELD] = consumed_power
+                total_power_field_used = self.set_custom_field_value(
+                    rack,
+                    RACK_TOTAL_POWER_FIELD_ALIASES,
+                    reserved_power
+                )
 
-                if usage_percent is not None:
-                    rack.custom_field_data[RACK_USAGE_PERCENT_FIELD] = float(usage_percent)
-                else:
-                    rack.custom_field_data.pop(RACK_USAGE_PERCENT_FIELD, None)
+                percentage_field_used = self.set_custom_field_value(
+                    rack,
+                    RACK_POWER_PERCENT_FIELD_ALIASES,
+                    float(rack_percentage)
+                )
 
                 rack.full_clean()
                 rack.save()
 
                 self.log_success(
-                    f"{rack_name}: {consumed_power} W, {device_count} device(s), capacity={capacity_display} W, usage={usage_display}",
+                    f"{rack_name}: {total_power_field_used} updated from {previous_total_power} to {reserved_power} W; "
+                    f"{percentage_field_used} updated from {previous_percentage} to {percentage_display}; "
+                    f"devices={device_count}.",
                     obj=rack
                 )
+
             else:
                 self.log_info(
-                    f"[DRY RUN] {rack_name}: {consumed_power} W, {device_count} device(s), capacity={capacity_display} W, usage={usage_display}",
+                    f"[DRY RUN] {rack_name}: {RACK_TOTAL_POWER_FIELD} would be updated from {previous_total_power} to {reserved_power} W; "
+                    f"{RACK_POWER_PERCENT_FIELD} would be updated from {previous_percentage} to {percentage_display}; "
+                    f"devices={device_count}.",
                     obj=rack
                 )
 
-        global_usage_percent = None
-
-        if total_capacity_with_capacity > 0:
-            global_usage_percent = round(
-                Decimal(total_consumption_with_capacity) / Decimal(total_capacity_with_capacity) * Decimal(100),
-                2
-            )
-
         result_lines.append(
-            f"| TOTAL ALL RACKS "
-            f"| {total_devices_all_racks} "
-            f"| {total_consumption_all_racks} "
-            f"| N/A "
-            f"| N/A |"
-        )
-
-        result_lines.append(
-            f"| TOTAL RACKS WITH VALID CAPACITY "
-            f"| {total_devices_with_capacity} "
-            f"| {total_consumption_with_capacity} "
-            f"| {total_capacity_with_capacity if total_capacity_with_capacity > 0 else 'N/A'} "
-            f"| {self.format_usage(global_usage_percent)} |"
+            f"| **TOTAL ALL RACKS** "
+            f"| **{total_devices}** "
+            f"| **{total_reserved_power}** "
+            f"| **100.00%** |"
         )
 
         result_lines.append("")
         result_lines.append("Summary:")
         result_lines.append(f"- Total racks analyzed: {total_racks}")
-        result_lines.append(f"- Racks with valid capacity: {racks_with_valid_capacity}")
-        result_lines.append(f"- Racks without valid capacity: {racks_without_valid_capacity}")
-        result_lines.append(f"- Total devices in all racks: {total_devices_all_racks}")
-        result_lines.append(f"- Total consumption across all racks: {total_consumption_all_racks} W")
-        result_lines.append(f"- Total valid rack capacity: {total_capacity_with_capacity if total_capacity_with_capacity > 0 else 'N/A'} W")
-        result_lines.append(f"- Global usage percentage: {self.format_usage(global_usage_percent)}")
+        result_lines.append(f"- Total devices in racks: {total_devices}")
+        result_lines.append(f"- Total reserved power across all racks: {total_reserved_power} W")
+        result_lines.append(f"- Devices with valid power value: {total_devices_with_power_value}")
+        result_lines.append(f"- Devices without power value: {total_devices_without_power_value}")
+        result_lines.append(f"- Invalid device power values ignored: {invalid_device_values}")
+        result_lines.append(f"- Negative device power values ignored: {negative_device_values}")
         result_lines.append("")
-        result_lines.append("Note: Global usage percentage is calculated only for racks with a valid positive capacity.")
+        result_lines.append("Custom fields used:")
+        result_lines.append(f"- Device power source field: {DEVICE_POWER_FIELD}")
+        result_lines.append(f"- Rack total power field: {RACK_TOTAL_POWER_FIELD}")
+        result_lines.append(f"- Rack percentage field: {RACK_POWER_PERCENT_FIELD}")
+        result_lines.append("")
+        result_lines.append("Note:")
+        result_lines.append("- Rack Reserved Power is calculated from device Power_Reserved_Watts values.")
+        result_lines.append("- % of Global Power = Rack Reserved Power / Total Reserved Power of all racks.")
+        result_lines.append("- This is reserved/documented power, not live PDU measurement.")
 
         return "\n".join(result_lines)
