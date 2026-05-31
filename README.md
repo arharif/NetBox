@@ -1,3 +1,4 @@
+cat > scripts/rack_power_consumption.py <<'EOF'
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
@@ -109,7 +110,7 @@ class RackPowerConsumptionCalculation(Script):
             result_lines.append(message)
 
         return "\n".join(result_lines)
-
+EOF
 
 
 ---
