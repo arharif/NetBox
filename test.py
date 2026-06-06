@@ -6,9 +6,16 @@ COPY plugin_requirements.txt /opt/netbox/plugin_requirements.txt
 
 RUN HTTPS_PROXY=http://wsg-proxy.oecd.org:443 \
     HTTP_PROXY=http://wsg-proxy.oecd.org:443 \
-    /usr/local/bin/uv --native-tls pip install -r /opt/netbox/plugin_requirements.txt
+    PIP_DEFAULT_TIMEOUT=300 \
+    /opt/netbox/venv/bin/pip install --no-cache-dir \
+    --trusted-host pypi.org \
+    --trusted-host files.pythonhosted.org \
+    --trusted-host pypi.python.org \
+    -r /opt/netbox/plugin_requirements.txt
 
 RUN mkdir -p /opt/netbox/netbox/static/netbox_topology_views/img && \
     chown -R unit:root /opt/netbox/netbox/static/netbox_topology_views
 
 USER unit
+
+WORKDIR /opt/netbox/netbox
