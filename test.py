@@ -1,4 +1,3 @@
-cat > Dockerfile-Plugins <<'EOF'
 FROM netboxcommunity/netbox:v4.4-3.4.1
 
 USER root
@@ -14,4 +13,3 @@ RUN SECRET_KEY="dummyKeyWithMinimumLength-----------------------------" \
     /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py collectstatic --no-input
 
 USER unit
-EOF
