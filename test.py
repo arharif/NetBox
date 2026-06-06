@@ -6,11 +6,10 @@ COPY plugin_requirements.txt /opt/netbox/plugin_requirements.txt
 
 RUN HTTPS_PROXY=http://wsg-proxy.oecd.org:443 \
     HTTP_PROXY=http://wsg-proxy.oecd.org:443 \
-    PIP_DEFAULT_TIMEOUT=300 \
-    /opt/netbox/venv/bin/pip install --no-cache-dir \
-    --trusted-host pypi.org \
-    --trusted-host files.pythonhosted.org \
-    --trusted-host pypi.python.org \
+    /usr/local/bin/uv pip install \
+    --allow-insecure-host pypi.org \
+    --allow-insecure-host files.pythonhosted.org \
+    --allow-insecure-host pypi.python.org \
     -r /opt/netbox/plugin_requirements.txt
 
 RUN mkdir -p /opt/netbox/netbox/static/netbox_topology_views/img && \
