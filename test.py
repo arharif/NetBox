@@ -6,7 +6,7 @@ COPY plugin_requirements.txt /opt/netbox/plugin_requirements.txt
 
 RUN HTTPS_PROXY=http://wsg-proxy.oecd.org:443 \
     HTTP_PROXY=http://wsg-proxy.oecd.org:443 \
-    /usr/local/bin/uv pip install -r /opt/netbox/plugin_requirements.txt
+    /usr/local/bin/uv --native-tls pip install -r /opt/netbox/plugin_requirements.txt
 
 RUN mkdir -p /opt/netbox/netbox/static/netbox_topology_views/img && \
     chown -R unit:root /opt/netbox/netbox/static/netbox_topology_views
